@@ -1,0 +1,45 @@
+# Numerical computing and data analysis
+numpy
+pandas
+scipy
+scikit-learn>=1.4
+joblib
+
+# Visualization and EDA
+matplotlib
+seaborn
+fg-data-profiling
+shap
+graphviz
+
+# Deep learning (install a CUDA build separately if required)
+torch
+torchvision
+
+# Models and hyperparameter search
+catboost
+xgboost
+lightgbm
+optuna
+
+# Experiment tracking and progress
+mlflow
+tqdm
+tqdm-joblib
+
+# Jupyter
+ipython
+ipykernel
+ipywidgets
+jupyterlab
+notebook
+
+# Project utilities
+loguru
+python-dotenv
+ruff
+typer
+pip
+
+# Install the Cookiecutter project from its root directory
+# -e .
