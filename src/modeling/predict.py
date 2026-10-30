@@ -1,42 +1,87 @@
+import json
 from pathlib import Path
+import mlflow
+import numpy as np
+import pandas as pd
+import joblib
 
-from loguru import logger
-from tqdm import tqdm
-import typer
+class Predictor:
+    @staticmethod
+    def load_pipelines(path="models_id.json"):
+        # Ожидаемый формат:
+        # {
+        #     "ridge": ["models:/m-...", "models:/m-..."],
+        #     "catboost": ["models:/m-...", "models:/m-..."]
+        # }
+        with open(path, encoding="utf-8") as file:
+            model_ids = json.load(file)
 
-from src.config import MODELS_DIR, PROCESSED_DATA_DIR
+        pipelines = {}
 
-def predict_torch(X_test, checkpoint, model, device, batch_size=256):
-    cat_features = checkpoint["cat_cols"]
-    num_features = checkpoint["num_cols"]
-    encoder = checkpoint["encoder"]
-    scaler = checkpoint["scaler"]
+        for model_name, model_uris in model_ids.items():
+            pipelines[model_name] = [
+                mlflow.sklearn.load_model(
+                    uri if ":/" in uri else f"models:/{uri}"
+                )
+                for uri in model_uris
+            ]
 
-    missing = set(cat_features + num_features) - set(X_test.columns)
-    if missing:
-        raise ValueError(f"Отсутствуют признаки для DL: {sorted(missing)}")
+            print(f"{model_name}: загружено {len(pipelines[model_name])} пайплайнов")
 
-    X_cat = encoder.transform(X_test[cat_features]).astype("int64") + 1
-    X_num = scaler.transform(X_test[num_features]).astype("float32")
+        return pipelines
 
-    if not np.isfinite(X_num).all():
-        raise ValueError("В числовых признаках после StandardScaler есть NaN или inf.")
-    if (X_cat < 0).any():
-        raise ValueError(
-            "В категориальных индексах есть отрицательные значения. Проверьте кодирование."
+    @staticmethod
+    def run_test(pipelines, X_holdout, y_holdout,save_dir):
+        scores = {}
+
+        for model_name, fold_pipelines in pipelines.items():
+            pred_log = np.mean(
+                [pipeline.predict(X_holdout) for pipeline in fold_pipelines],
+                axis=0,
+            ).reshape(-1)
+
+            rmse = np.sqrt(
+                np.mean((np.asarray(y_holdout).reshape(-1) - pred_log) ** 2)
+            )
+            scores[model_name] = rmse
+            # joblib.dump(pipelines, save_dir / f"{model_name}_pipe.joblib")
+
+        results = (
+            pd.DataFrame(scores.items(), columns=["model", "holdout_log_rmse"])
+            .sort_values("holdout_log_rmse")
+            .reset_index(drop=True)
         )
 
-    # OrdinalEncoder у модели должен обучаться с unknown_value=-1,
-    # чтобы после +1 неизвестные категории получили индекс 0.
-    predictions = []
-    with torch.inference_mode():
-        for start in range(0, len(X_test), batch_size):
-            end = start + batch_size
-            x_cat = torch.as_tensor(X_cat[start:end], dtype=torch.long, device=device)
-            x_num = torch.as_tensor(
-                X_num[start:end], dtype=torch.float32, device=device
-            )
-            preds = model(x_num, x_cat)
-            predictions.append(preds.cpu().numpy())
+        print(results.to_string(index=False, float_format=lambda x: f"{x:.5f}"))
+        return results
 
-    return np.concatenate(predictions)
+
+    @staticmethod
+    # Предсказания на Kaggle test и отдельный CSV для каждой модели
+    def run_inference(pipelines, data_test, output_dir="submissions"):
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        predictions = {}
+
+        for model_name, fold_pipelines in pipelines.items():
+            pred_log = np.mean(
+                [pipeline.predict(data_test) for pipeline in fold_pipelines],
+                axis=0,
+            ).reshape(-1)
+
+            pred_price = np.expm1(pred_log)
+            predictions[model_name] = pred_price
+
+            submission = pd.DataFrame({
+                "Id": data_test["Id"].to_numpy(),
+                "SalePrice": pred_price,
+            })
+
+            path = output_dir / f"submission_{model_name}.csv"
+            submission.to_csv(path, index=False)
+
+            print(f"{model_name}: {len(submission)} строк → {path}")
+
+
+        return predictions

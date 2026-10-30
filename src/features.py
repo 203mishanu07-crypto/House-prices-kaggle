@@ -10,16 +10,8 @@ from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
 import typer
-from features import FeatureTransformer
 
-
-encoder_transformer = ColumnTransformer(
-    transformers=[
-        ('one_hot', OneHotEncoder(sparse_output=False, handle_unknown='ignore'), FeatureTransformer.cat_cols)
-    ],
-    remainder='passthrough'
-)
-
+#Добавить управление объемом признаков через подачу колонок
 class FeatureTransformer(TransformerMixin, BaseEstimator):
     cat_cols = [
             "MSSubClass",
@@ -47,7 +39,73 @@ class FeatureTransformer(TransformerMixin, BaseEstimator):
             "LotShape",
             "Electrical",
         ]
-    def __init__(self,cat_boosting = False):
+    num_cols = [
+            "FullBath",
+            "TotRmsAbvGrd",
+            "GarageCars",
+            "BedroomAbvGr",
+            "KitchenAbvGr",
+            "Utilities",
+            "OverallQual",
+            "OverallCond",
+            "ExterCond",
+            "BsmtQual",
+            "HeatingQC",
+            "KitchenQual",
+            "GarageFinish",
+            "Functional",
+            "LandSlope",
+            "BsmtExposure",
+            "CentralAir",
+            "Street",
+            "BsmtHalfBath",
+            "HalfBath",
+            "OpenPorch",
+            "EnclosedPorch",
+            "3SsnPorch",
+            "ScreenPorch",
+            "LowQualFin",
+            "BsmtFin",
+            "LotFrontage",
+            "LotFrontage_log",
+            "LotArea",
+            "LotArea_log",
+            "MasVnrArea",
+            "MasVnrArea_log",
+            "BsmtFinSF1",
+            "BsmtFinSF1_log",
+            "BsmtUnfSF",
+            "BsmtUnfSF_log",
+            "TotalBsmtSF",
+            "TotalBsmtSF_log",
+            "1stFlrSF",
+            "1stFlrSF_log",
+            "2ndFlrSF",
+            "2ndFlrSF_log",
+            "GarageArea",
+            "GarageArea_log",
+            "WoodDeckSF",
+            "WoodDeckSF_log",
+            "OpenPorchSF",
+            "OpenPorchSF_log",
+            "MiscVal",
+            "MiscVal_log",
+            "TotalSqFeet",
+            "TotalSqFeet_log",
+            "MoSold",
+            "YrSold",
+            "Age",
+            "Age_from_Remod",
+            "OverallQual*OverallCond",
+            "ExterQual*ExterCond",
+            "BsmtFinType1*BsmtFinSF1*BsmtQual",
+            "BsmtFinType2*BsmtFinSF2*BsmtQual",
+            "OverallBath",
+            "PoolOverall",
+            "Overall_Fireplaces",
+        ]
+
+    def __init__(self,cat_boosting = False, selected_columns = None):
         self.cat_boosting = cat_boosting
         self.X_cols = [
             "MSSubClass",
@@ -213,6 +271,7 @@ class FeatureTransformer(TransformerMixin, BaseEstimator):
         #LotFrontage
         self.frontage_by_area = None
         self.frontage_global = None
+        self.selected_columns = selected_columns
 
     def fit(self, data, y=None):
         
@@ -230,6 +289,18 @@ class FeatureTransformer(TransformerMixin, BaseEstimator):
             col: data[col].mode().iloc[0]
             for col in cols}
         
+        if self.selected_columns is None:
+            self.selected_columns_ = list(self.X_cols)
+        else:
+            self.selected_columns_ = list(self.selected_columns)
+
+            unknown = set(self.selected_columns_) - set(self.X_cols)
+
+            if unknown:
+                raise ValueError(
+                    f"Неизвестные признаки: {unknown}"
+                )
+
         self.is_fitted_ = True
         return self
 
@@ -265,9 +336,9 @@ class FeatureTransformer(TransformerMixin, BaseEstimator):
             raise ValueError(message)
 
         if self.cat_boosting:
-            data[self.cat_cols] = data[self.cat_cols].astype('category')
-
-        return data
+            data[self.cat_cols] = data[self.cat_cols].astype("category")
+            
+        return data.loc[:, self.selected_columns_].copy()
 
     def fill_missing(self, data):
         data = data.copy()
@@ -378,3 +449,21 @@ class FeatureTransformer(TransformerMixin, BaseEstimator):
 
         data = data[self.X_cols].copy()
         return data
+
+    def get_feature_names_out(self, input_features=None):
+        check_is_fitted(self, "is_fitted_")
+        return np.asarray(self.selected_columns_, dtype=object)
+
+    
+def get_existing_cat_cols(X):
+    return [
+        col for col in FeatureTransformer.cat_cols
+        if col in X.columns
+    ]
+
+encoder_transformer = ColumnTransformer(
+    transformers=[
+        ('one_hot', OneHotEncoder(sparse_output=False, handle_unknown='ignore'), get_existing_cat_cols)
+    ],
+    remainder='passthrough'
+)

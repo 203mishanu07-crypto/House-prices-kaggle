@@ -59,7 +59,7 @@ from pathlib import Path
 from IPython.display import display
 import json
 
-from mymlflow import Mlflow_logger
+from src.mymlflow import Mlflow_logger
 
 class PlotsDrawings():
     def __init__(self,logger:Mlflow_logger):
@@ -213,81 +213,168 @@ class PlotsDrawings():
         self.logger.log_heatmap(fig,parameter_x,parameter_y,run_id)
 
         return fig
-
+    #Разобраться как работает шап
     def create_shap_plots(self, pipelines, mode, X_train, run_id):
+
+        if not pipelines:
+            raise ValueError("Список pipelines пуст")
+
+        # Используем только первую модель
+        pipeline = pipelines[0]
+
         with mlflow.start_run(run_id=run_id):
-            shap_frames = []
-            base_values = []
 
             X_background = X_train.sample(
                 n=min(100, len(X_train)),
                 random_state=42,
             )
 
-            for pipeline in pipelines["estimator"]:
-                X_transformed = pipeline[:-1].transform(X_train)
-                background = pipeline[:-1].transform(X_background)
+            preprocessor = pipeline[:-1]
 
-                model = pipeline.named_steps["model"]
-                if isinstance(X_transformed, pd.DataFrame):
-                    # Включая пайплайн без encoder:
-                    # FeatureTransformer уже вернул названия столбцов.
-                    names = X_transformed.columns.tolist()
-                else:
-                    names = (
-                        pipeline.named_steps["encoder"]
-                        .get_feature_names_out()
-                        .tolist()
+            X_transformed = preprocessor.transform(X_train)
+            background = preprocessor.transform(X_background)
+
+            X_to_explain = X_transformed
+            explain_kwargs = {}
+
+            model = pipeline.named_steps["model"]
+
+            if isinstance(X_transformed, pd.DataFrame):
+                names = X_transformed.columns.tolist()
+            else:
+                names = (
+                    pipeline.named_steps["encoder"]
+                    .get_feature_names_out()
+                    .tolist()
+                )
+
+            match mode:
+
+                case "catboost" | "lightgbm":
+                    explainer = shap.TreeExplainer(
+                        model,
+                        feature_perturbation="tree_path_dependent",
                     )
 
-                match mode:
-                    case "catboost" | "lightgbm":
-                        explainer = shap.TreeExplainer(
-                            model,
-                            feature_perturbation="tree_path_dependent",
+                case "tree":
+                    explainer = shap.TreeExplainer(
+                        model,
+                        background,
+                    )
+
+                case "linear":
+                    explainer = shap.LinearExplainer(
+                        model,
+                        background,
+                    )
+
+                case "dnn":
+
+                    # Подготавливаем данные для SHAP
+                    X_shap = X_transformed.copy().reset_index(drop=True)
+                    bg_shap = background.copy().reset_index(drop=True)
+
+                    category_maps = {}
+
+                    for col in model.cat_cols:
+
+                        combined = pd.concat(
+                            [X_shap[col], bg_shap[col]],
+                            ignore_index=True,
                         )
 
-                    case "tree":
-                        explainer = shap.TreeExplainer(model, background)
+                        codes, uniques = pd.factorize(combined)
 
-                    case "linear":
-                        explainer = shap.LinearExplainer(model, background)
+                        n_x = len(X_shap)
 
-                    case _:
-                        raise ValueError(f"Неизвестный режим SHAP: {mode!r}")
+                        X_shap[col] = codes[:n_x]
+                        bg_shap[col] = codes[n_x:]
 
-                explanation = explainer(X_transformed)
+                        category_maps[col] = uniques.to_numpy()
 
-                if mode not in ("cat_features", "lightgbm"):
-                    explanation = explainer(X_transformed)
+                    def predict_fn(data):
 
-                shap_frames.append(
-                    pd.DataFrame(explanation.values, columns=names) 
+                        X_input = pd.DataFrame(
+                            data,
+                            columns=names,
+                        )
+
+                        # Восстанавливаем категории
+                        for col, categories in category_maps.items():
+
+                            indexes = (
+                                np.rint(X_input[col].to_numpy())
+                                .astype(int)
+                            )
+
+                            if (
+                                np.any(indexes < 0)
+                                or np.any(indexes >= len(categories))
+                            ):
+                                raise ValueError(
+                                    f"Некорректные индексы SHAP в {col}"
+                                )
+
+                            X_input[col] = categories[indexes]
+
+                        return model.predict(X_input)
+
+                    explainer = shap.Explainer(
+                        predict_fn,
+                        bg_shap,
+                        algorithm="permutation",
+                        feature_names=names,
+                    )
+
+                    X_to_explain = X_shap
+
+                    explain_kwargs["max_evals"] = (
+                        2 * len(names) + 1
+                    )
+
+                case _:
+                    raise ValueError(
+                        f"Неизвестный режим SHAP: {mode!r}"
+                    )
+
+            # Рассчитываем SHAP только один раз
+            explanation = explainer(
+                X_to_explain,
+                **explain_kwargs,
+            )
+            # Для DNN сохраняем исходные значения признаков
+            # вместо временных числовых кодов
+            if mode == "dnn":
+                explanation.data = X_transformed.to_numpy()
+
+            feature_importance = (
+                pd.Series(
+                    np.abs(explanation.values).mean(axis=0),
+                    index=names,
+                    name="mean_abs_shap",
                 )
-                base_values.append(explanation.base_values)
+                .sort_values(ascending=False)
+            )
 
-            # Выравниваем вклады по названиям колонок
-            mean_shap = shap_frames[0].copy()
-
-            for frame in shap_frames[1:]:
-                mean_shap = mean_shap.add(frame, fill_value=0)
-
-            mean_shap /= len(shap_frames)
-            feature_names = mean_shap.columns.tolist()
-
-            shap_values = shap.Explanation(
-                values=mean_shap.to_numpy(),
-                base_values=np.mean(base_values, axis=0),
-                feature_names=feature_names,
+            importance_df = (
+                feature_importance
+                .rename_axis("feature")
+                .reset_index()
+                )
+            
+            mlflow.log_text(
+                importance_df.to_csv(index=False),
+                "shap/feature_importance.csv",
             )
 
             shap_plots = self.draw_shap_plots(
-                shap_values,
+                explanation,
                 sample_idx=0,
-                feature_names=feature_names,
+                feature_names=names,
             )
 
-        return shap_plots
+        return shap_plots,feature_importance
+
 
     def draw_shap_plots(self,shap_values,sample_idx=0,feature_names=None):
 

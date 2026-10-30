@@ -1,0 +1,30 @@
+{
+    "ridge": [
+        "models:/m-f49fdcf9726a4796986c94e141618db4",
+        "models:/m-c186d9684c5a4f4bb12d5e8dfb89ec50",
+        "models:/m-1e84b6fc0f4b443886b6827f2d4fa10c",
+        "models:/m-b403b86835754975add028f6c8fa5986",
+        "models:/m-14dac9a9941442179017eaa78244f68b"
+    ],
+    "lightgbm": [
+        "models:/m-2a30f52afba94b958ba0071f3d830619",
+        "models:/m-d0563fa13a6c481ab03fe2af568495f5",
+        "models:/m-905fce39215d4d92a91bbf5e792952c5",
+        "models:/m-140b342d865f4d1faf259871c875cad9",
+        "models:/m-1e13ac9346b84f5592d478c855b9bdcc"
+    ],
+    "catboost": [
+        "models:/m-a20907e55143430189dcd9b8ba24e628",
+        "models:/m-4a2b60e5075647c39a59e8ca6c61c843",
+        "models:/m-47e9692556784d43970a2347b2e89364",
+        "models:/m-d24a935137d14fbeb88c526cbdad5966",
+        "models:/m-8744a5b9cc744baab9e346a1167a6410"
+    ],
+    "dnn": [
+        "models:/m-4603770b5b0140fba727c651ca1fa5e6",
+        "models:/m-b4ce3644612e412f9a48fc990acbff3b",
+        "models:/m-8c97da34837f4094bda554d07bccb6cf",
+        "models:/m-8bbb9b818fd0477885dad05b968657c7",
+        "models:/m-cb270b621fce447693ba74a15916c2c3"
+    ]
+}
